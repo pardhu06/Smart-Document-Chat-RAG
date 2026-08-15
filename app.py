@@ -12,7 +12,7 @@ from wordcloud import WordCloud
 
 
 # ============================================================
-# PAGE CONFIGURATION
+# CONFIGURATION
 # ============================================================
 
 st.set_page_config(
@@ -23,7 +23,7 @@ st.set_page_config(
 
 
 # ============================================================
-# HUGGING FACE API
+# HUGGING FACE API KEY
 # ============================================================
 
 try:
@@ -31,14 +31,18 @@ try:
 except Exception:
     st.error(
         "❌ Hugging Face API key not found.\n\n"
-        "Create .streamlit/secrets.toml and add:\n\n"
-        "HUGGINGFACE_API_KEY = \"your_token_here\""
+        "Create `.streamlit/secrets.toml` and add:\n\n"
+        'HUGGINGFACE_API_KEY = "your_token_here"'
     )
     st.stop()
 
 
+# ============================================================
+# HUGGING FACE CLIENT
+# ============================================================
+
 client = InferenceClient(
-    model="HuggingFaceH4/zephyr-7b-beta",
+    model="Qwen/Qwen2.5-7B-Instruct",
     token=HUGGINGFACE_API_KEY
 )
 
@@ -68,21 +72,19 @@ st.markdown(
         );
 
         color: black;
-        padding: 15px;
+        padding: 12px;
         border-radius: 15px;
-        margin: 12px 0;
+        margin: 10px 0;
         text-align: right;
-        font-size: 16px;
+        font-weight: 500;
     }
 
     .chat-bot {
-        background: rgba(255,255,255,0.10);
+        background: rgba(255, 255, 255, 0.10);
         color: white;
-        padding: 15px;
+        padding: 12px;
         border-radius: 15px;
-        margin: 12px 0;
-        font-size: 16px;
-        line-height: 1.6;
+        margin: 10px 0;
     }
 
     </style>
@@ -104,11 +106,8 @@ if "vectorstore" not in st.session_state:
 if "all_text" not in st.session_state:
     st.session_state.all_text = ""
 
-if "retrieved_docs" not in st.session_state:
-    st.session_state.retrieved_docs = []
-
-if "file_name" not in st.session_state:
-    st.session_state.file_name = None
+if "document_name" not in st.session_state:
+    st.session_state.document_name = ""
 
 
 # ============================================================
@@ -116,10 +115,6 @@ if "file_name" not in st.session_state:
 # ============================================================
 
 st.sidebar.title("⚙️ Controls")
-
-st.sidebar.write(
-    "Upload a PDF and ask questions about it."
-)
 
 uploaded_file = st.sidebar.file_uploader(
     "📂 Upload PDF",
@@ -134,22 +129,6 @@ uploaded_file = st.sidebar.file_uploader(
 if st.sidebar.button("🗑️ Clear Chat"):
 
     st.session_state.chat_history = []
-    st.session_state.retrieved_docs = []
-
-    st.rerun()
-
-
-# ============================================================
-# RESET DOCUMENT
-# ============================================================
-
-if st.sidebar.button("🔄 Reset Document"):
-
-    st.session_state.vectorstore = None
-    st.session_state.all_text = ""
-    st.session_state.retrieved_docs = []
-    st.session_state.file_name = None
-    st.session_state.chat_history = []
 
     st.rerun()
 
@@ -161,8 +140,7 @@ if st.sidebar.button("🔄 Reset Document"):
 st.title("🤖 Smart Document Chat")
 
 st.write(
-    "Chat with your PDF using "
-    "**Retrieval-Augmented Generation (RAG)**."
+    "Chat with your PDF using Retrieval-Augmented Generation (RAG)."
 )
 
 
@@ -172,86 +150,52 @@ st.write(
 
 if uploaded_file is not None:
 
-    if uploaded_file.name != st.session_state.file_name:
+    # Process only if a new PDF is uploaded
+    if (
+        st.session_state.vectorstore is None
+        or st.session_state.document_name != uploaded_file.name
+    ):
 
-        # ----------------------------------------------------
-        # Save uploaded PDF
-        # ----------------------------------------------------
+        st.session_state.chat_history = []
 
+        st.session_state.vectorstore = None
+
+        st.session_state.all_text = ""
+
+        st.session_state.document_name = uploaded_file.name
+
+        # Save uploaded PDF temporarily
         with open("temp.pdf", "wb") as f:
             f.write(uploaded_file.getbuffer())
 
+        with st.spinner("📄 Processing document..."):
 
-        # ----------------------------------------------------
-        # Reset previous document
-        # ----------------------------------------------------
-
-        st.session_state.vectorstore = None
-        st.session_state.all_text = ""
-        st.session_state.retrieved_docs = []
-        st.session_state.chat_history = []
-
-        st.session_state.file_name = uploaded_file.name
-
-
-        # ----------------------------------------------------
-        # Process PDF
-        # ----------------------------------------------------
-
-        try:
-
-            with st.spinner("📄 Processing your PDF..."):
+            try:
 
                 # Load PDF
                 loader = PyPDFLoader("temp.pdf")
 
                 documents = loader.load()
 
-                if not documents:
-                    st.error(
-                        "❌ Could not extract text from PDF."
-                    )
-                    st.stop()
-
-
-                # ------------------------------------------------
-                # Split document into chunks
-                # ------------------------------------------------
-
+                # Split document
                 splitter = CharacterTextSplitter(
                     chunk_size=500,
                     chunk_overlap=50
                 )
 
-                docs = splitter.split_documents(
-                    documents
-                )
+                docs = splitter.split_documents(documents)
 
-
-                # ------------------------------------------------
-                # Save complete text
-                # ------------------------------------------------
-
+                # Save text for WordCloud
                 st.session_state.all_text = " ".join(
-                    doc.page_content
-                    for doc in docs
+                    [doc.page_content for doc in docs]
                 )
 
-
-                # ------------------------------------------------
                 # Create embeddings
-                # ------------------------------------------------
-
                 embeddings = HuggingFaceEmbeddings(
-                    model_name=
-                    "sentence-transformers/all-MiniLM-L6-v2"
+                    model_name="sentence-transformers/all-MiniLM-L6-v2"
                 )
 
-
-                # ------------------------------------------------
                 # Create FAISS vector database
-                # ------------------------------------------------
-
                 st.session_state.vectorstore = (
                     FAISS.from_documents(
                         docs,
@@ -259,71 +203,24 @@ if uploaded_file is not None:
                     )
                 )
 
+                st.sidebar.success(
+                    "✅ Document ready!"
+                )
 
-            st.sidebar.success(
-                "✅ Document ready!"
-            )
+            except Exception as e:
 
-            st.success(
-                f"📄 {uploaded_file.name} "
-                "processed successfully!"
-            )
+                st.error(
+                    f"❌ Error while processing PDF:\n\n{e}"
+                )
 
-
-        except Exception as e:
-
-            st.error(
-                f"❌ Error while processing PDF:\n\n{str(e)}"
-            )
-
-            st.session_state.vectorstore = None
-
-
-# ============================================================
-# DOCUMENT INFORMATION
-# ============================================================
-
-if st.session_state.vectorstore is not None:
-
-    st.subheader("📊 Document Information")
-
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-
-        st.metric(
-            "📄 Document",
-            st.session_state.file_name
-        )
-
-    with col2:
-
-        word_count = len(
-            st.session_state.all_text.split()
-        )
-
-        st.metric(
-            "📝 Words",
-            word_count
-        )
-
-    with col3:
-
-        character_count = len(
-            st.session_state.all_text
-        )
-
-        st.metric(
-            "🔤 Characters",
-            character_count
-        )
+                st.stop()
 
 
 # ============================================================
 # WORD CLOUD
 # ============================================================
 
-if st.session_state.all_text.strip():
+if st.session_state.all_text:
 
     st.subheader("☁️ Document Insights")
 
@@ -332,13 +229,10 @@ if st.session_state.all_text.strip():
         wordcloud = WordCloud(
             width=900,
             height=350,
-            background_color="black",
-            max_words=100,
-            collocations=False
+            background_color="black"
         ).generate(
             st.session_state.all_text
         )
-
 
         fig, ax = plt.subplots(
             figsize=(12, 4)
@@ -358,27 +252,11 @@ if st.session_state.all_text.strip():
 
         plt.close(fig)
 
-
-    except ValueError:
+    except Exception as e:
 
         st.warning(
-            "⚠️ Not enough text to generate word cloud."
+            f"Could not generate word cloud: {e}"
         )
-
-
-# ============================================================
-# ASK QUESTIONS
-# ============================================================
-
-st.subheader("💬 Ask Questions")
-
-
-if st.session_state.vectorstore is None:
-
-    st.info(
-        "📂 Upload a PDF from the sidebar "
-        "to start asking questions."
-    )
 
 
 # ============================================================
@@ -391,38 +269,30 @@ query = st.chat_input(
 
 
 # ============================================================
-# RAG PIPELINE
+# RAG QUESTION ANSWERING
 # ============================================================
 
 if query:
 
+    # Check whether document exists
     if st.session_state.vectorstore is None:
 
         st.warning(
-            "⚠️ Please upload a PDF first."
+            "📂 Please upload a PDF document first."
         )
 
     else:
 
-        # ----------------------------------------------------
-        # Save user question
-        # ----------------------------------------------------
-
+        # Add user message
         st.session_state.chat_history.append(
             ("user", query)
         )
 
+        with st.spinner("🤖 Thinking..."):
 
-        try:
+            try:
 
-            with st.spinner(
-                "🔎 Searching your document..."
-            ):
-
-                # ------------------------------------------------
-                # Similarity search
-                # ------------------------------------------------
-
+                # Retrieve relevant documents
                 retrieved_docs = (
                     st.session_state.vectorstore
                     .similarity_search(
@@ -431,45 +301,27 @@ if query:
                     )
                 )
 
-
-                # ------------------------------------------------
-                # Save retrieved documents
-                # ------------------------------------------------
-
-                st.session_state.retrieved_docs = (
-                    retrieved_docs
-                )
-
-
-                # ------------------------------------------------
                 # Create context
-                # ------------------------------------------------
-
                 context = "\n\n".join(
-                    doc.page_content
-                    for doc in retrieved_docs
+                    [
+                        doc.page_content
+                        for doc in retrieved_docs
+                    ]
                 )
 
-
-                # ------------------------------------------------
-                # Prompt
-                # ------------------------------------------------
-
+                # RAG prompt
                 prompt = f"""
 You are a strict document assistant.
 
-Answer the user's question ONLY using the
-information contained in the provided context.
+Answer the question ONLY using the information
+provided in the context below.
 
-Rules:
+If the answer cannot be found in the context,
+say exactly:
 
-1. Do not use outside knowledge.
-2. Do not make up information.
-3. Give a clear and simple answer.
-4. If the answer cannot be found in the context,
-   say exactly:
+"Answer not found in document."
 
-Answer not found in document.
+Do not make up information.
 
 Context:
 {context}
@@ -480,57 +332,66 @@ Question:
 Answer:
 """
 
-
-                # ------------------------------------------------
-                # Hugging Face LLM
-                # ------------------------------------------------
-
+                # Call Hugging Face
                 response = client.chat_completion(
+
                     messages=[
                         {
                             "role": "user",
                             "content": prompt
                         }
                     ],
+
                     max_tokens=300,
+
                     temperature=0.2
                 )
 
-
-                # ------------------------------------------------
-                # Get answer
-                # ------------------------------------------------
-
                 answer = (
-                    response
-                    .choices[0]
+                    response.choices[0]
                     .message["content"]
                 )
 
+                # Save answer
+                st.session_state.chat_history.append(
+                    ("bot", answer)
+                )
 
-            # ----------------------------------------------------
-            # Save assistant answer
-            # ----------------------------------------------------
+            except Exception as e:
 
-            st.session_state.chat_history.append(
-                ("bot", answer)
-            )
+                error_message = str(e)
 
+                if "503" in error_message:
 
-        except Exception as e:
+                    answer = (
+                        "⚠️ The AI model is temporarily "
+                        "unavailable because the service "
+                        "is currently at capacity. "
+                        "Please try again in a few moments."
+                    )
 
-            error_message = (
-                "❌ Error while generating answer:\n\n"
-                + str(e)
-            )
+                elif "401" in error_message:
 
-            st.session_state.chat_history.append(
-                ("bot", error_message)
-            )
+                    answer = (
+                        "❌ Hugging Face authentication "
+                        "failed. Please check your API key "
+                        "in `.streamlit/secrets.toml`."
+                    )
+
+                else:
+
+                    answer = (
+                        "❌ Error while generating answer:\n\n"
+                        + error_message
+                    )
+
+                st.session_state.chat_history.append(
+                    ("bot", answer)
+                )
 
 
 # ============================================================
-# DISPLAY CHAT HISTORY
+# DISPLAY CHAT
 # ============================================================
 
 for role, msg in st.session_state.chat_history:
@@ -540,7 +401,7 @@ for role, msg in st.session_state.chat_history:
         st.markdown(
             f"""
             <div class="chat-user">
-                👤 <b>You:</b> {msg}
+                🧑 {msg}
             </div>
             """,
             unsafe_allow_html=True
@@ -551,9 +412,7 @@ for role, msg in st.session_state.chat_history:
         st.markdown(
             f"""
             <div class="chat-bot">
-                🤖 <b>Assistant:</b>
-                <br><br>
-                {msg}
+                🤖 {msg}
             </div>
             """,
             unsafe_allow_html=True
@@ -561,6 +420,11 @@ for role, msg in st.session_state.chat_history:
 
 
 # ============================================================
-# RETRIEVED CONTEXT
+# FOOTER
 # ============================================================
 
+st.markdown("---")
+
+st.caption(
+    "Smart Document Chat • RAG • LangChain • FAISS • Hugging Face"
+)
